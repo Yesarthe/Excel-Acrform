@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>FormPdf.Core</RootNamespace>
+    <AssemblyName>FormPdf.Core</AssemblyName>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- iText は AGPL。社内利用・非配布に限る。PDF 操作は Pdf/ITextPdfFormWriter.cs に閉じ込めている。 -->
+    <PackageReference Include="itext7" Version="9.3.0" />
+    <!-- iText 9 は PDF の ID 生成等で BouncyCastle アダプタを要求する -->
+    <PackageReference Include="itext7.bouncy-castle-adapter" Version="9.3.0" />
+  </ItemGroup>
+
+</Project>
