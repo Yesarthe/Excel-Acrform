@@ -1,0 +1,38 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Excel-DNA のビルド・パックは Linux でも動くので、日本語フォントを入れやすい Ubuntu で実行する
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: テスト用の日本語フォント
+        run: sudo apt-get update && sudo apt-get install -y fonts-ipafont-gothic fonts-wqy-zenhei
+
+      - name: テスト
+        run: dotnet test tests/FormPdf.Core.Tests -c Release
+
+      - name: アドインのビルド
+        run: dotnet build src/FormPdf.AddIn -c Release
+
+      - name: 配布物の作成
+        run: |
+          mkdir -p dist
+          cp src/FormPdf.AddIn/bin/Release/net48/publish/*.xll dist/
+          cp install/*.ps1 dist/
+          cp README.md dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FormPdfAddin
+          path: dist/

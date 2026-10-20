@@ -1,0 +1,2 @@
+# Windows PowerShell 5.1 で日本語を正しく読むため、.ps1 は UTF-8 (BOM 付き) + CRLF で扱う
+*.ps1 text eol=crlf

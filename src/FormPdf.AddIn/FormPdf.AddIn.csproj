@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- .NET Framework 4.8 は Windows 10 (1903 以降) / 11 に標準搭載 -->
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>FormPdf.AddIn</RootNamespace>
+    <AssemblyName>FormPdf.AddIn</AssemblyName>
+    <Version>1.0.0</Version>
+    <Product>フォームPDF出力アドイン</Product>
+
+    <!-- Excel-DNA: 出力は FormPdfAddin.xll（32bit Excel 用）/ FormPdfAddin64.xll（64bit Excel 用）。
+         publish フォルダに依存 DLL をすべて詰め込んだ単一ファイル版（-packed.xll）が出る。 -->
+    <ExcelAddInName>フォームPDF出力</ExcelAddInName>
+    <ExcelAddInFileName>FormPdfAddin</ExcelAddInFileName>
+    <ExcelDnaPackXllSuffix>-packed</ExcelDnaPackXllSuffix>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ExcelDna.AddIn" Version="1.9.0" />
+    <PackageReference Include="ExcelDna.Interop" Version="15.0.1" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FormPdf.Core\FormPdf.Core.csproj" />
+  </ItemGroup>
+
+  <!-- 依存 DLL（iText, BouncyCastle 等）もすべて -packed.xll に詰め込む（.NET Framework では明示指定が必要） -->
+  <Target Name="FormPdfPackDependencies" AfterTargets="ResolveReferences" BeforeTargets="ExcelDnaBuild">
+    <ItemGroup>
+      <_FormPdfPackDll Include="@(ReferenceCopyLocalPaths->'%(Filename)%(Extension)')" Condition="'%(ReferenceCopyLocalPaths.Extension)' == '.dll' AND '%(ReferenceCopyLocalPaths.NuGetPackageId)' != 'ExcelDna.Interop'" />
+    </ItemGroup>
+    <PropertyGroup>
+      <ExcelAddInInclude>@(_FormPdfPackDll)</ExcelAddInInclude>
+    </PropertyGroup>
+  </Target>
+
+</Project>
