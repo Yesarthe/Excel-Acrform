@@ -174,7 +174,21 @@ namespace FormPdf.AddIn
                         warnings.Add("回転したページがあります。フィールドの位置がずれる可能性があります。");
                     if (markerPdf != null)
                         ApplyMeasurements(markerPdf, markerShapes, pageSizes, warnings);
-                    spec = new FormSpecBuilder(settings, warnings).Build(jobs.Select(j => j.Info).ToList(), pageSizes);
+                    var builder = new FormSpecBuilder(settings, warnings);
+                    if (settings.DetectButtonFrames && jobs.Any(j => j.Targets.Any(t => t.Info.Kind != TargetKind.TextBox)))
+                    {
+                        try
+                        {
+                            builder.PageDrawings = _writer.ReadDrawnAreas(tempPdf);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Write("印字の解析に失敗（ボタン位置は既定の切り出しで配置）: " + ex);
+                        }
+                    }
+                    spec = builder.Build(jobs.Select(j => j.Info).ToList(), pageSizes);
+                    if (builder.ButtonCount > 0)
+                        Logger.Write($"ボタン位置の検出: {builder.DetectedButtonCount} / {builder.ButtonCount} 個", builder.ButtonLog);
                 }
 
                 fieldCount = WriteOutput(tempPdf, output, spec, settings, warnings, owner);

@@ -20,6 +20,7 @@ namespace FormPdf.AddIn
         private readonly CheckBox _openAfter = new CheckBox { Text = "出力後に PDF を開く", AutoSize = true };
         private readonly CheckBox _autoCalibrate = new CheckBox { Text = "自動位置合わせ（Excel で 2 回出力して実際の位置を測る）", AutoSize = true };
         private readonly CheckBox _calibration = new CheckBox { Text = "校正モード（フィールド位置に赤枠と名前を描く）", AutoSize = true };
+        private readonly CheckBox _detectButtons = new CheckBox { Text = "四角・丸の位置を Excel の印字から検出する", AutoSize = true };
         private readonly NumericUpDown _offsetX = Number(-200, 200, 1, 0.5m);
         private readonly NumericUpDown _offsetY = Number(-200, 200, 1, 0.5m);
         private readonly NumericUpDown _scaleFix = Number(-20, 20, 2, 0.1m);
@@ -66,8 +67,9 @@ namespace FormPdf.AddIn
             _color.Click += (s, e) => PickColor();
             Row(table, "チェック記号の色", _color);
             Row(table, "", _inheritChecks);
-            Row(table, "チェックボックスの四角（pt、0=高さ）", _checkSize);
-            Row(table, "オプションボタンの丸（pt、0=高さ）", _optionSize);
+            Row(table, "", _detectButtons);
+            Row(table, "検出できないときの四角（pt、0=高さ）", _checkSize);
+            Row(table, "検出できないときの丸（pt、0=高さ）", _optionSize);
             Row(table, "四角・丸の左端位置（pt）", _buttonInset);
 
             Section(table, "位置の補正（校正）");
@@ -152,6 +154,7 @@ namespace FormPdf.AddIn
             _offsetX.Value = Clamp(_offsetX, s.OffsetX);
             _offsetY.Value = Clamp(_offsetY, s.OffsetY);
             _scaleFix.Value = Clamp(_scaleFix, s.ScaleCorrectionPercent);
+            _detectButtons.Checked = s.DetectButtonFrames;
             _checkSize.Value = Clamp(_checkSize, s.CheckBoxSize);
             _optionSize.Value = Clamp(_optionSize, s.OptionButtonSize);
             _buttonInset.Value = Clamp(_buttonInset, s.ButtonLeftInset);
@@ -177,6 +180,7 @@ namespace FormPdf.AddIn
             s.OffsetX = (double)_offsetX.Value;
             s.OffsetY = (double)_offsetY.Value;
             s.ScaleCorrectionPercent = (double)_scaleFix.Value;
+            s.DetectButtonFrames = _detectButtons.Checked;
             s.CheckBoxSize = (double)_checkSize.Value;
             s.OptionButtonSize = (double)_optionSize.Value;
             s.ButtonLeftInset = (double)_buttonInset.Value;

@@ -57,6 +57,11 @@ namespace FormPdf.Core.Infrastructure
         [DataMember(Order = 50)] public double CheckBoxSize { get; set; } = 10;
         /// <summary>オプションボタンの丸部分のサイズ（pt、Excel 上の 100% 時）。0 なら図形の高さを使う。</summary>
         [DataMember(Order = 51)] public double OptionButtonSize { get; set; } = 10;
+        /// <summary>
+        /// チェックボックスの四角・オプションボタンの丸を、Excel が印字した PDF から探してウィジェットをぴったり重ねる。
+        /// 見つからないときは CheckBoxSize / OptionButtonSize / ButtonLeftInset で切り出す。
+        /// </summary>
+        [DataMember(Order = 49)] public bool DetectButtonFrames { get; set; } = true;
         /// <summary>四角・丸の左端の位置（図形左端からの距離、pt）。</summary>
         [DataMember(Order = 52)] public double ButtonLeftInset { get; set; } = 0;
 
@@ -75,6 +80,7 @@ namespace FormPdf.Core.Infrastructure
             OpenAfterExport = d.OpenAfterExport;
             Scope = d.Scope;
             AutoCalibrate = d.AutoCalibrate;
+            DetectButtonFrames = d.DetectButtonFrames;
             CheckBoxSize = d.CheckBoxSize;
             OptionButtonSize = d.OptionButtonSize;
             ButtonLeftInset = d.ButtonLeftInset;
