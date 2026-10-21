@@ -14,6 +14,11 @@ namespace FormPdf.Core.Pdf
         IList<PageSizeD> ReadPageSizes(string pdfPath);
 
         /// <summary>
+        /// PDF 内の塗りつぶし（RGB の塗りのみ）を列挙する。自動位置合わせのマーカー検出に使う。
+        /// </summary>
+        IList<FilledArea> ReadFilledAreas(string pdfPath);
+
+        /// <summary>
         /// sourcePdf（Excel が出力した PDF）に AcroForm フィールドを追加して outputPdf に書き出す。
         /// 致命的でない問題は warnings に追加し、処理を続ける。
         /// </summary>

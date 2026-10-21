@@ -8,8 +8,10 @@ using System.Windows.Forms;
 using FormPdf.AddIn.Excel;
 using FormPdf.Core.Fields;
 using FormPdf.Core.Infrastructure;
+using FormPdf.Core.Layout;
 using FormPdf.Core.Model;
 using FormPdf.Core.Pdf;
+using Office = Microsoft.Office.Core;
 using XL = Microsoft.Office.Interop.Excel;
 
 namespace FormPdf.AddIn
@@ -83,6 +85,8 @@ namespace FormPdf.AddIn
             bool enableEvents = _app.EnableEvents;
             bool saved = wb.Saved;
             int fieldCount;
+            string markerPdf = null;
+            var markerShapes = new List<ShapeInfo>();
 
             try
             {
@@ -126,6 +130,23 @@ namespace FormPdf.AddIn
                         job.Info.ExcelPageCount = PrintSetupReader.GetPageCount(_app, wb, job.Com);
                     }
 
+                    if (settings.AutoCalibrate && targetCount > 0)
+                    {
+                        Status("図形の位置を測定中…");
+                        markerPdf = tempPdf + ".markers.pdf";
+                        try
+                        {
+                            ExportMarkers(wb, jobs, settings.Scope, markerPdf, markerShapes, warnings);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Write("自動位置合わせ用の出力に失敗: " + ex);
+                            warnings.Add("自動位置合わせができなかったため、計算で配置しました: " + ex.Message);
+                            TryDelete(markerPdf);
+                            markerPdf = null;
+                        }
+                    }
+
                     Status("PDF を出力中…");
                     ExportWithExcel(wb, jobs, settings.Scope, tempPdf);
                 }
@@ -151,6 +172,8 @@ namespace FormPdf.AddIn
                     var pageSizes = _writer.ReadPageSizes(tempPdf);
                     if (pageSizes.Any(p => p.Rotation != 0))
                         warnings.Add("回転したページがあります。フィールドの位置がずれる可能性があります。");
+                    if (markerPdf != null)
+                        ApplyMeasurements(markerPdf, markerShapes, pageSizes, warnings);
                     spec = new FormSpecBuilder(settings, warnings).Build(jobs.Select(j => j.Info).ToList(), pageSizes);
                 }
 
@@ -160,6 +183,7 @@ namespace FormPdf.AddIn
             finally
             {
                 TryDelete(tempPdf);
+                if (markerPdf != null) TryDelete(markerPdf);
                 _app.StatusBar = false;
             }
 
@@ -187,6 +211,97 @@ namespace FormPdf.AddIn
             else if (warnings.Count == 0)
             {
                 Dialogs.Info(owner, $"PDF を出力しました（フィールド {fieldCount} 個）。\n{output}");
+            }
+        }
+
+        /// <summary>
+        /// 自動位置合わせ: 各図形と同じ位置・大きさの四角を図形ごとに固有の色で置き、一度 PDF 出力する。
+        /// 四角は出力後に必ず削除する。markerShapes[i] がマーカー番号 i の図形。
+        /// </summary>
+        private void ExportMarkers(XL.Workbook wb, List<SheetJob> jobs, ExportScope scope, string path,
+            List<ShapeInfo> markerShapes, WarningList warnings)
+        {
+            var markers = new List<XL.Shape>();
+            try
+            {
+                foreach (var job in jobs.Where(j => j.Worksheet != null && j.Targets.Count > 0))
+                {
+                    XL.Shapes shapes = job.Worksheet.Shapes;
+                    try
+                    {
+                        foreach (var t in job.Targets)
+                        {
+                            if (markerShapes.Count >= MarkerCalibration.Capacity)
+                            {
+                                warnings.Add($"図形が {MarkerCalibration.Capacity} 個を超えるため、超えた分は計算で配置します。");
+                                break;
+                            }
+                            var b = t.Info.Bounds;
+                            var m = shapes.AddShape(Office.MsoAutoShapeType.msoShapeRectangle,
+                                (float)b.Left, (float)b.Top, (float)Math.Max(1, b.Width), (float)Math.Max(1, b.Height));
+                            markers.Add(m);
+                            using (var com = new ComScope())
+                            {
+                                m.Name = "_FormPdfMarker" + markerShapes.Count;
+                                var line = com.Add(m.Line);
+                                line.Visible = Office.MsoTriState.msoFalse;
+                                var shadow = com.Add(m.Shadow);
+                                shadow.Visible = Office.MsoTriState.msoFalse;
+                                var fill = com.Add(m.Fill);
+                                fill.Visible = Office.MsoTriState.msoTrue;
+                                fill.Solid();
+                                fill.Transparency = 0;
+                                var fore = com.Add(fill.ForeColor);
+                                fore.RGB = MarkerCalibration.ExcelRgbFor(markerShapes.Count);
+                            }
+                            markerShapes.Add(t.Info);
+                        }
+                    }
+                    finally
+                    {
+                        ComScope.Release(shapes);
+                    }
+                }
+
+                ExportWithExcel(wb, jobs, scope, path);
+            }
+            finally
+            {
+                foreach (var m in markers)
+                {
+                    try
+                    {
+                        m.Delete();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Write("位置合わせ用の図形を削除できませんでした: " + ex.Message);
+                        warnings.Add("位置合わせ用の図形（名前が _FormPdfMarker で始まる）を削除できませんでした。手動で削除してください。");
+                    }
+                    ComScope.Release(m);
+                }
+            }
+        }
+
+        private void ApplyMeasurements(string markerPdf, List<ShapeInfo> markerShapes, IList<PageSizeD> pageSizes, WarningList warnings)
+        {
+            try
+            {
+                var markerPages = _writer.ReadPageSizes(markerPdf);
+                if (markerPages.Count != pageSizes.Count)
+                {
+                    warnings.Add($"位置測定用の PDF とページ数が異なる（{markerPages.Count} / {pageSizes.Count}）ため、計算で配置しました。");
+                    return;
+                }
+                int n = MarkerCalibration.Apply(_writer.ReadFilledAreas(markerPdf), markerShapes, pageSizes);
+                Logger.Write($"自動位置合わせ: {n} / {markerShapes.Count} 個を測定");
+                foreach (var s in markerShapes.Where(x => x.MeasuredRect == null))
+                    warnings.Add($"{s.Name}: 位置を測定できなかったため計算で配置しました。");
+            }
+            catch (Exception ex)
+            {
+                Logger.Write("位置測定に失敗: " + ex);
+                warnings.Add("位置を測定できなかったため、計算で配置しました: " + ex.Message);
             }
         }
 

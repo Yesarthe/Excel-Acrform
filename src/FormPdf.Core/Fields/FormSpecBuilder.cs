@@ -45,7 +45,9 @@ namespace FormPdf.Core.Fields
                     pageCount = layout.Pages.Count;
                     if (sheet.ExcelPageCount.HasValue && sheet.ExcelPageCount.Value != pageCount)
                     {
-                        _warnings.Add(sheet.Name, null,
+                        // 全図形を実測できていれば計算上のページ数は使わないので警告しない
+                        if (!AllMeasured(sheet.Shapes))
+                            _warnings.Add(sheet.Name, null,
                             $"計算したページ数（{pageCount}）と Excel のページ数（{sheet.ExcelPageCount}）が一致しません。位置がずれる可能性があります。");
                         pageCount = sheet.ExcelPageCount.Value;
                     }
@@ -68,44 +70,60 @@ namespace FormPdf.Core.Fields
                     if (multiSheet)
                         parent = topNames.Allocate(NameAllocator.Sanitize(sheet.Name));
                     var names = multiSheet ? new NameAllocator() : topNames;
-                    if (layout == null)
-                    {
-                        _warnings.Add(sheet.Name, null, "印刷範囲が取得できないため、このシートのフィールドは作成しません。");
-                    }
-                    else
-                    {
-                        BuildSheet(spec, sheet, layout, pageStart, pageSizes.Count, parent, names);
-                    }
+                    if (layout == null && sheet.Shapes.Any(x => x.MeasuredRect == null))
+                        _warnings.Add(sheet.Name, null, "印刷範囲が取得できないため、位置を測定できなかった図形はスキップします。");
+                    BuildSheet(spec, sheet, layout, pageStart, pageSizes.Count, parent, names);
                 }
 
                 pageStart += pageCount;
             }
 
-            if (pageStart != pageSizes.Count && pageSizes.Count > 0)
+            if (pageStart != pageSizes.Count && pageSizes.Count > 0 && !AllMeasured(sheets.SelectMany(x => x.Shapes)))
             {
                 _warnings.Add($"PDF のページ数（{pageSizes.Count}）と計算上のページ数（{pageStart}）が一致しません。位置がずれている可能性があります。");
             }
             return spec;
         }
 
+        private static bool AllMeasured(IEnumerable<ShapeInfo> shapes) =>
+            shapes.All(x => x.MeasuredRect.HasValue && x.MeasuredPageIndex.HasValue);
+
         private void BuildSheet(FormDocumentSpec spec, SheetInfo sheet, SheetLayout layout,
             int pageStart, int pdfPageCount, string parent, NameAllocator names)
         {
-            var mapped = new Dictionary<ShapeInfo, MappedRect>();
+            var mapped = new Dictionary<ShapeInfo, Placement>();
             foreach (var shape in sheet.Shapes)
             {
-                var m = PrintLayoutCalculator.Map(layout, shape.Bounds, _settings.OffsetX, _settings.OffsetY);
-                if (m == null)
+                Placement p;
+                if (shape.MeasuredRect.HasValue && shape.MeasuredPageIndex.HasValue)
                 {
-                    _warnings.Add(sheet.Name, shape.Name, "印刷範囲の外にあるためスキップしました。");
-                    continue;
+                    // 自動位置合わせで実測した位置（ページも実測値）
+                    var r = shape.MeasuredRect.Value;
+                    p = new Placement
+                    {
+                        Page = shape.MeasuredPageIndex.Value,
+                        Rect = new PdfBox(r.X + _settings.OffsetX, r.Y - _settings.OffsetY, r.Width, r.Height),
+                        Scale = shape.Bounds.Width > 1 ? r.Width / shape.Bounds.Width
+                              : shape.Bounds.Height > 1 ? r.Height / shape.Bounds.Height : 1,
+                    };
                 }
-                if (pageStart + m.Value.PageIndexInSheet >= pdfPageCount)
+                else
+                {
+                    var m = layout == null ? null : PrintLayoutCalculator.Map(layout, shape.Bounds, _settings.OffsetX, _settings.OffsetY);
+                    if (m == null)
+                    {
+                        _warnings.Add(sheet.Name, shape.Name, "印刷範囲の外にあるためスキップしました。");
+                        continue;
+                    }
+                    p = new Placement { Page = pageStart + m.Value.PageIndexInSheet, Rect = m.Value.PdfRect, Scale = m.Value.Scale };
+                }
+
+                if (p.Page < 0 || p.Page >= pdfPageCount)
                 {
                     _warnings.Add(sheet.Name, shape.Name, "対応する PDF ページが見つからないためスキップしました。");
                     continue;
                 }
-                mapped[shape] = m.Value;
+                mapped[shape] = p;
             }
 
             // テキストボックス・チェックボックス（図形の並び順）
@@ -115,7 +133,7 @@ namespace FormPdf.Core.Fields
                 switch (shape.Kind)
                 {
                     case TargetKind.TextBox:
-                        spec.Fields.Add(BuildText(shape, m, pageStart, sheet, parent, names));
+                        spec.Fields.Add(BuildText(shape, m, sheet, parent, names));
                         break;
                     case TargetKind.CheckBox:
                         spec.Fields.Add(new CheckBoxSpec
@@ -124,7 +142,7 @@ namespace FormPdf.Core.Fields
                             Name = names.Allocate(NameAllocator.Sanitize(shape.Name)),
                             SourceSheet = sheet.Name,
                             SourceShape = shape.Name,
-                            PageIndex = pageStart + m.PageIndexInSheet,
+                            PageIndex = m.Page,
                             Rect = ButtonRect(m, _settings.CheckBoxSize),
                             Checked = _settings.InheritCheckStates && shape.IsChecked,
                         });
@@ -150,7 +168,7 @@ namespace FormPdf.Core.Fields
                     var b = new RadioButtonSpec
                     {
                         ExportValue = exportNames.Allocate(shape.Name),
-                        PageIndex = pageStart + m.PageIndexInSheet,
+                        PageIndex = m.Page,
                         Rect = ButtonRect(m, _settings.OptionButtonSize),
                         SourceShape = shape.Name,
                     };
@@ -162,7 +180,7 @@ namespace FormPdf.Core.Fields
             }
         }
 
-        private TextFieldSpec BuildText(ShapeInfo shape, MappedRect m, int pageStart, SheetInfo sheet, string parent, NameAllocator names)
+        private TextFieldSpec BuildText(ShapeInfo shape, Placement m, SheetInfo sheet, string parent, NameAllocator names)
         {
             double fontSize = shape.FontSize > 0 ? shape.FontSize : 11;
             return new TextFieldSpec
@@ -171,8 +189,8 @@ namespace FormPdf.Core.Fields
                 Name = names.Allocate(NameAllocator.Sanitize(shape.Name)),
                 SourceSheet = sheet.Name,
                 SourceShape = shape.Name,
-                PageIndex = pageStart + m.PageIndexInSheet,
-                Rect = m.PdfRect,
+                PageIndex = m.Page,
+                Rect = m.Rect,
                 Value = _settings.InheritTextValues ? NormalizeNewLines(shape.Text) : "",
                 FontSize = _settings.ScaleFontWithPage ? fontSize * m.Scale : fontSize,
                 Alignment = shape.Alignment,
@@ -181,15 +199,23 @@ namespace FormPdf.Core.Fields
         }
 
         /// <summary>図形の左端から、ボタン部分（四角・丸）の正方形を切り出す。</summary>
-        private PdfBox ButtonRect(MappedRect m, double sizeSetting)
+        private PdfBox ButtonRect(Placement m, double sizeSetting)
         {
             double s = m.Scale;
-            double full = m.PdfRect.Height;
+            double full = m.Rect.Height;
             double size = sizeSetting > 0 ? Math.Min(sizeSetting * s, full) : full;
-            size = Math.Min(size, m.PdfRect.Width);
-            double x = m.PdfRect.X + _settings.ButtonLeftInset * s;
-            double y = m.PdfRect.Y + (full - size) / 2;
+            size = Math.Min(size, m.Rect.Width);
+            double x = m.Rect.X + _settings.ButtonLeftInset * s;
+            double y = m.Rect.Y + (full - size) / 2;
             return new PdfBox(x, y, size, size);
+        }
+
+        /// <summary>図形 1 個の配置先（PDF 全体でのページ番号、PDF 座標、印刷倍率）。</summary>
+        private struct Placement
+        {
+            public int Page;
+            public PdfBox Rect;
+            public double Scale;
         }
 
         private static string NormalizeNewLines(string text)
