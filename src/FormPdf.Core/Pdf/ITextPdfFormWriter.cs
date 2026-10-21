@@ -93,7 +93,8 @@ namespace FormPdf.Core.Pdf
                     // 画像は単位正方形を CTM で写した範囲に描かれる
                     var m = image.GetImageCtm();
                     var box = Transform(m, new[] { (0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0) });
-                    if (box.HasValue) Add(box.Value, double.NaN, double.NaN, double.NaN);
+                    if (box.HasValue)
+                        _result.Add(new FilledArea { PageIndex = _page, R = double.NaN, G = double.NaN, B = double.NaN, Bounds = box.Value, IsImage = true });
                     return;
                 }
 
@@ -119,11 +120,38 @@ namespace FormPdf.Core.Pdf
                         foreach (var pt in seg.GetBasePoints())
                             points.Add((pt.GetX(), pt.GetY()));
                 var bounds = Transform(info.GetCtm(), points);
-                if (bounds.HasValue) Add(bounds.Value, r, g, b);
+                if (!bounds.HasValue) return;
+
+                bool stroke = (op & PathRenderInfo.STROKE) != 0;
+                bool invisible = _fillsOnly ? false
+                    : (!fill || IsWhite(info.GetFillColor())) && (!stroke || IsWhite(info.GetStrokeColor()));
+                _result.Add(new FilledArea
+                {
+                    PageIndex = _page,
+                    R = r,
+                    G = g,
+                    B = b,
+                    Bounds = bounds.Value,
+                    Stroked = stroke,
+                    Filled = fill,
+                    Invisible = invisible,
+                });
             }
 
-            private void Add(PdfBox bounds, double r, double g, double b) =>
-                _result.Add(new FilledArea { PageIndex = _page, R = r, G = g, B = b, Bounds = bounds });
+            /// <summary>白（グレー 1、RGB 1,1,1、CMYK 0,0,0,0）か。パターン等は白とみなさない。</summary>
+            private static bool IsWhite(Color color)
+            {
+                var v = color?.GetColorValue();
+                if (v == null) return false;
+                const float e = 0.01f;
+                switch (v.Length)
+                {
+                    case 1: return v[0] >= 1 - e;
+                    case 3: return v[0] >= 1 - e && v[1] >= 1 - e && v[2] >= 1 - e;
+                    case 4: return v[0] <= e && v[1] <= e && v[2] <= e && v[3] <= e;
+                    default: return false;
+                }
+            }
 
             private static PdfBox? Transform(Matrix ctm, IEnumerable<(double x, double y)> points)
             {

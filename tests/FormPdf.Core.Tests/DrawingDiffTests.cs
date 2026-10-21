@@ -7,6 +7,7 @@ using FormPdf.Core.Infrastructure;
 using FormPdf.Core.Layout;
 using FormPdf.Core.Model;
 using FormPdf.Core.Pdf;
+using iText.IO.Image;
 using iText.Kernel.Colors;
 using iText.Kernel.Geom;
 using iText.Kernel.Pdf;
@@ -132,6 +133,72 @@ namespace FormPdf.Core.Tests
             Assert.Equal(103, r.X, 2);
             Assert.Equal(14, r.Width, 2);
             Assert.Equal(1, builder.DetectedButtonCount);
+        }
+    
+        /// <summary>
+        /// キャプションを消して小さくしたチェックボックス（20 x 17）。Excel は四角の他に
+        /// コントロール全体の白い背景や画像を描くことがあり、それがほぼ正方形なので四角と紛れる。
+        /// </summary>
+        private string MakeSmallControlPdf(bool backgroundImage, bool bigLightSquare)
+        {
+            var path = System.IO.Path.Combine(_dir, $"small-{backgroundImage}-{bigLightSquare}.pdf");
+            using (var pdf = new PdfDocument(new PdfWriter(path)))
+            {
+                var c = new PdfCanvas(pdf.AddNewPage(PageSize.A4));
+                // 白い背景（RGB とグレーの両方）
+                c.SetFillColor(new DeviceRgb(255, 255, 255)).Rectangle(100, 500, 20, 17).Fill();
+                c.SetFillColor(new DeviceGray(1f)).Rectangle(100.5, 500.5, 19, 16).Fill();
+                if (backgroundImage)
+                {
+                    var data = Enumerable.Repeat((byte)200, 4 * 4 * 3).ToArray();
+                    var img = ImageDataFactory.Create(4, 4, 3, 8, data, null);
+                    c.AddImageFittedIntoRectangle(img, new Rectangle(100, 500, 20, 17), false);
+                }
+                if (bigLightSquare)
+                    c.SetFillColor(new DeviceRgb(240, 240, 240)).Rectangle(96, 494, 30, 30).Fill();
+                // 本物の四角（灰色の枠と白い中身）
+                c.SetStrokeColor(ColorConstants.GRAY).Rectangle(102, 503.5, 10, 10).Stroke();
+                c.SetFillColor(ColorConstants.WHITE).Rectangle(103, 504.5, 8, 8).Fill();
+            }
+            return path;
+        }
+
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(true, false)]
+        [InlineData(false, true)]
+        [InlineData(true, true)]
+        public void SmallControl_PicksRealBox_NotBackgroundOrLargeShapes(bool backgroundImage, bool bigLightSquare)
+        {
+            var path = MakeSmallControlPdf(backgroundImage, bigLightSquare);
+            var drawn = new ITextPdfFormWriter().ReadDrawnAreas(path);
+            Assert.Equal(3, drawn.Count(d => d.Invisible)); // 白い背景 2 個と白い中身
+
+            var cb = BuilderTests.Check("小", 0, 0);
+            cb.Bounds = new RectD(0, 0, 20, 17);
+            cb.MeasuredPageIndex = 0;
+            cb.MeasuredRect = new PdfBox(100, 500, 20, 17);
+            var builder = new FormSpecBuilder(new FormPdfSettings(), new WarningList())
+            {
+                PageDrawings = drawn,           // 差分済みとみなす（すべてコントロールの描画）
+                PageDrawingsAreIsolated = true,
+            };
+            var spec = builder.Build(new[] { BuilderTests.Sheet("S", cb) }, new[] { new PageSizeD(595, 842) });
+            var r = spec.Fields.OfType<CheckBoxSpec>().Single().Rect;
+            Assert.Equal(102, r.X, 2);
+            Assert.Equal(503.5, r.Y, 2);
+            Assert.Equal(10, r.Width, 2);
+            Assert.Equal(10, r.Height, 2);
+            // 周辺の描画がログに出る
+            Assert.Contains(builder.ButtonLog, l => l.Contains("周辺の描画") && l.Contains("(白)"));
+        }
+
+        [Fact]
+        public void OnlyWholeControlDrawing_IsUsedAsLastResort()
+        {
+            var control = new PdfBox(100, 500, 12, 12);
+            var found = ButtonFrameDetector.Find(new[] { new PdfBox(100, 500, 12, 12) }, control, 10, isolated: true);
+            Assert.Equal(12, found.Value.Width, 2);
         }
     }
 }

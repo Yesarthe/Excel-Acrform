@@ -16,7 +16,7 @@ namespace FormPdf.Core.Fields
         private readonly FormPdfSettings _settings;
         private readonly WarningList _warnings;
 
-        private Dictionary<int, List<PdfBox>> _drawingsByPage;
+        private Dictionary<int, List<FilledArea>> _drawingsByPage;
 
         public FormSpecBuilder(FormPdfSettings settings, WarningList warnings)
         {
@@ -30,7 +30,7 @@ namespace FormPdf.Core.Fields
         /// </summary>
         public IList<FilledArea> PageDrawings
         {
-            set => _drawingsByPage = value?.GroupBy(a => a.PageIndex).ToDictionary(g => g.Key, g => g.Select(a => a.Bounds).ToList());
+            set => _drawingsByPage = value?.GroupBy(a => a.PageIndex).ToDictionary(g => g.Key, g => g.ToList());
         }
 
         /// <summary>
@@ -242,7 +242,11 @@ namespace FormPdf.Core.Fields
             if (_settings.DetectButtonFrames && _drawingsByPage != null && _drawingsByPage.TryGetValue(m.Page, out var drawings))
             {
                 double expected = (sizeSetting > 0 ? sizeSetting : 10) * s;
-                var found = ButtonFrameDetector.Find(drawings, m.Rect, expected, PageDrawingsAreIsolated);
+                // 白一色の描画（背景など）は紙の上で見えないので四角の候補にしない
+                var visible = drawings.Where(d => !d.Invisible).Select(d => d.Bounds);
+                var found = ButtonFrameDetector.Find(visible, m.Rect, expected, PageDrawingsAreIsolated);
+                if (PageDrawingsAreIsolated)
+                    ButtonLog.Add($"{name} 周辺の描画: {DescribeNearby(drawings, m.Rect)}");
                 if (found.HasValue)
                 {
                     var f = found.Value;
@@ -297,6 +301,23 @@ namespace FormPdf.Core.Fields
                 ButtonLog.Add($"{name} p{m.Page + 1} 全体={m.Rect} → 推定={box}（検出例 {list.Count} 個から）");
             }
             _undetected.Clear();
+        }
+
+        /// <summary>コントロール付近の描画の一覧（ログ用。最大 12 個）。</summary>
+        private static string DescribeNearby(List<FilledArea> drawings, PdfBox r)
+        {
+            double margin = 2 + r.Height * 0.25;
+            var near = drawings
+                .Where(d =>
+                {
+                    double cx = d.Bounds.X + d.Bounds.Width / 2, cy = d.Bounds.Y + d.Bounds.Height / 2;
+                    return cx >= r.X - margin && cx <= r.X + r.Width + margin && cy >= r.Y - margin && cy <= r.Y + r.Height + margin;
+                })
+                .OrderBy(d => d.Bounds.X)
+                .ToList();
+            if (near.Count == 0) return "なし";
+            var text = string.Join(" ", near.Take(12).Select(d => d.Describe()));
+            return near.Count > 12 ? $"{text} …ほか {near.Count - 12} 個" : text;
         }
 
         private static double Median(IEnumerable<double> values)

@@ -24,28 +24,44 @@ namespace FormPdf.Core.Layout
         /// <returns>見つかった四角・丸の外接矩形。見つからなければ null。</returns>
         public static PdfBox? Find(IEnumerable<PdfBox> drawings, PdfBox control, double expectedSize, bool isolated = false)
         {
-            double minSize = Math.Max(2.5, expectedSize * 0.4);
+            double minSize = isolated ? 2.5 : Math.Max(2.5, expectedSize * 0.4);
+            // Excel の四角は表示倍率で変わるが、100% で約 10pt、拡大しても 2 倍程度
             double maxSize = isolated
-                ? Math.Max(control.Height * 1.6, expectedSize * 2.5) + Tolerance
+                ? Math.Max(expectedSize * 2.2, minSize) + Tolerance
                 : Math.Max(Math.Min(control.Height + Tolerance, expectedSize * 2.5), minSize);
-            if (isolated) minSize = 2.5;
 
-            // コントロールの中にある、正方形に近い小さな図形（キャプションの文字はパスではないので含まれない）
+            // コントロールの中にある描画（キャプションの文字はパスではないので含まれない）
             var inside = isolated
                 ? drawings.Where(b => CenterInside(b, control, Tolerance + control.Height * 0.25)).ToList()
                 : drawings.Where(b => Inside(b, control)).ToList();
+
+            // コントロール全体とほぼ同じ大きさの描画（背景・画像）は四角ではない。他に候補が無いときだけ使う。
+            // （キャプションを消して小さくしたチェックボックスでは、背景がほぼ正方形になり四角と紛れる）
+            var notWhole = inside.Where(b => !CoversControl(b, control)).ToList();
+            return FindSquare(notWhole, control, minSize, maxSize)
+                ?? FindFromPieces(notWhole, control, minSize, maxSize)
+                ?? (notWhole.Count < inside.Count ? FindSquare(inside, control, minSize, maxSize) : null);
+        }
+
+        private static bool CoversControl(PdfBox b, PdfBox control) =>
+            b.Width >= control.Width * 0.9 - Tolerance && b.Height >= control.Height * 0.9 - Tolerance;
+
+        private static PdfBox? FindSquare(List<PdfBox> inside, PdfBox control, double minSize, double maxSize)
+        {
             var squares = inside
                 .Where(b => b.Width >= minSize && b.Height >= minSize && b.Width <= maxSize && b.Height <= maxSize)
                 .Where(b => b.Width / b.Height > 0.7 && b.Width / b.Height < 1.43)
                 .ToList();
-            if (squares.Count == 0) return FindFromPieces(inside, control, minSize, maxSize);
+            if (squares.Count == 0) return null;
 
-            // 四角・丸はコントロールの左端にある。立体枠など重なった図形はまとめて外側を取る。
+            // 四角・丸はコントロールの左端にある。立体枠など重なった図形はまとめて外側を取る
+            // （ただし一回り大きい程度まで。大きく広がるものは別の描画）。
             var first = squares.OrderBy(b => Math.Round(b.X, 1)).ThenByDescending(b => b.Width * b.Height).First();
             double x1 = first.X, y1 = first.Y, x2 = first.X + first.Width, y2 = first.Y + first.Height;
+            double limit = Math.Max(first.Width, first.Height) * 1.25 + 0.5;
             foreach (var b in squares)
             {
-                if (Overlaps(b, first))
+                if (Overlaps(b, first) && b.Width <= limit && b.Height <= limit)
                 {
                     x1 = Math.Min(x1, b.X);
                     y1 = Math.Min(y1, b.Y);

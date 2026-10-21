@@ -114,6 +114,22 @@ namespace FormPdf.Core.Model
         public double G;
         public double B;
         public PdfBox Bounds;
+
+        // 以下は ReadDrawnAreas（全描画）のときだけ設定される
+        /// <summary>線で描かれている。</summary>
+        public bool Stroked;
+        /// <summary>塗りつぶされている。</summary>
+        public bool Filled;
+        /// <summary>画像。</summary>
+        public bool IsImage;
+        /// <summary>白一色の描画（白い紙の上では見えない。コントロールの背景など）。</summary>
+        public bool Invisible;
+
+        public string Describe()
+        {
+            string kind = IsImage ? "画像" : Stroked && Filled ? "線+塗" : Stroked ? "線" : "塗";
+            return $"{Bounds}{kind}{(Invisible ? "(白)" : "")}";
+        }
     }
 
     public sealed class GroupBoxInfo
