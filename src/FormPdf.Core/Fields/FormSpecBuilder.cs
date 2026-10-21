@@ -99,6 +99,7 @@ namespace FormPdf.Core.Fields
             {
                 _warnings.Add($"PDF のページ数（{pageSizes.Count}）と計算上のページ数（{pageStart}）が一致しません。位置がずれている可能性があります。");
             }
+            ApplyLearnedToUndetected();
             return spec;
         }
 
@@ -153,16 +154,17 @@ namespace FormPdf.Core.Fields
                         spec.Fields.Add(BuildText(shape, m, sheet, parent, names));
                         break;
                     case TargetKind.CheckBox:
-                        spec.Fields.Add(new CheckBoxSpec
+                        var cb = new CheckBoxSpec
                         {
                             ParentName = parent,
                             Name = names.Allocate(NameAllocator.Sanitize(shape.Name)),
                             SourceSheet = sheet.Name,
                             SourceShape = shape.Name,
                             PageIndex = m.Page,
-                            Rect = ButtonRect(m, _settings.CheckBoxSize),
                             Checked = _settings.InheritCheckStates && shape.IsChecked,
-                        });
+                        };
+                        cb.Rect = ButtonRect(m, _settings.CheckBoxSize, TargetKind.CheckBox, shape.Name, r => cb.Rect = r);
+                        spec.Fields.Add(cb);
                         break;
                 }
             }
@@ -186,9 +188,9 @@ namespace FormPdf.Core.Fields
                     {
                         ExportValue = exportNames.Allocate(shape.Name),
                         PageIndex = m.Page,
-                        Rect = ButtonRect(m, _settings.OptionButtonSize),
                         SourceShape = shape.Name,
                     };
+                    b.Rect = ButtonRect(m, _settings.OptionButtonSize, TargetKind.OptionButton, shape.Name, r => b.Rect = r);
                     g.Buttons.Add(b);
                     if (_settings.InheritCheckStates && shape.IsChecked && g.SelectedValue == null)
                         g.SelectedValue = b.ExportValue;
@@ -215,11 +217,20 @@ namespace FormPdf.Core.Fields
             };
         }
 
+        /// <summary>印字から検出できたボタンの、コントロールに対する四角・丸の位置（印刷倍率で割った値）。</summary>
+        private readonly Dictionary<TargetKind, List<(double dx, double dy, double size)>> _learned =
+            new Dictionary<TargetKind, List<(double, double, double)>>();
+
+        /// <summary>検出できなかったボタン。Build の最後に、検出できたボタンの位置関係を当てはめる。</summary>
+        private readonly List<(TargetKind kind, Placement m, string name, Action<PdfBox> set)> _undetected =
+            new List<(TargetKind, Placement, string, Action<PdfBox>)>();
+
         /// <summary>
-        /// ボタン部分（四角・丸）の位置。Excel の印字から見つかればそれに合わせ、
-        /// 見つからなければ図形の左端・縦中央から正方形を切り出す。
+        /// ボタン部分（四角・丸）の位置。Excel の印字から見つかればそれに合わせる。
+        /// 見つからなければいったん図形の左端・縦中央から正方形を切り出し、
+        /// Build の最後に、同じ PDF で検出できたボタンの位置関係があればそれで置き直す。
         /// </summary>
-        private PdfBox ButtonRect(Placement m, double sizeSetting)
+        private PdfBox ButtonRect(Placement m, double sizeSetting, TargetKind kind, string name, Action<PdfBox> setLater)
         {
             double s = m.Scale;
             ButtonCount++;
@@ -229,9 +240,17 @@ namespace FormPdf.Core.Fields
                 var found = ButtonFrameDetector.Find(drawings, m.Rect, expected);
                 if (found.HasValue)
                 {
+                    var f = found.Value;
                     DetectedButtonCount++;
-                    ButtonLog.Add($"p{m.Page + 1} 全体={m.Rect} → 検出={found.Value}");
-                    return found.Value;
+                    ButtonLog.Add($"{name} p{m.Page + 1} 全体={m.Rect} → 検出={f}");
+                    if (s > 0)
+                    {
+                        if (!_learned.TryGetValue(kind, out var list)) _learned[kind] = list = new List<(double, double, double)>();
+                        list.Add(((f.X - m.Rect.X) / s,
+                                  (f.Y + f.Height / 2 - (m.Rect.Y + m.Rect.Height / 2)) / s,
+                                  Math.Max(f.Width, f.Height) / s));
+                    }
+                    return f;
                 }
             }
 
@@ -241,8 +260,42 @@ namespace FormPdf.Core.Fields
             double x = m.Rect.X + _settings.ButtonLeftInset * s;
             double y = m.Rect.Y + (full - size) / 2;
             var box = new PdfBox(x, y, size, size);
-            ButtonLog.Add($"p{m.Page + 1} 全体={m.Rect} → 既定={box}");
+            _undetected.Add((kind, m, name, setLater));
             return box;
+        }
+
+        /// <summary>
+        /// 検出できなかったボタンを、同じ種類（無ければもう一方の種類）の検出結果の中央値で置き直す。
+        /// Excel の四角・丸は大きさも左端からの位置もコントロールによらず一定なので、1 個でも検出できれば合わせられる。
+        /// </summary>
+        private void ApplyLearnedToUndetected()
+        {
+            foreach (var (kind, m, name, set) in _undetected)
+            {
+                if (!_learned.TryGetValue(kind, out var list) || list.Count == 0)
+                    list = _learned.Values.FirstOrDefault(l => l.Count > 0);
+                if (list == null)
+                {
+                    ButtonLog.Add($"{name} p{m.Page + 1} 全体={m.Rect} → 既定（検出例なし）");
+                    continue;
+                }
+                double s = m.Scale;
+                double dx = Median(list.Select(t => t.dx)) * s;
+                double dy = Median(list.Select(t => t.dy)) * s;
+                double size = Median(list.Select(t => t.size)) * s;
+                double cy = m.Rect.Y + m.Rect.Height / 2 + dy;
+                var box = new PdfBox(m.Rect.X + dx, cy - size / 2, size, size);
+                set(box);
+                ButtonLog.Add($"{name} p{m.Page + 1} 全体={m.Rect} → 推定={box}（検出例 {list.Count} 個から）");
+            }
+            _undetected.Clear();
+        }
+
+        private static double Median(IEnumerable<double> values)
+        {
+            var v = values.OrderBy(x => x).ToList();
+            int n = v.Count;
+            return n % 2 == 1 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;
         }
 
         /// <summary>図形 1 個の配置先（PDF 全体でのページ番号、PDF 座標、印刷倍率）。</summary>
