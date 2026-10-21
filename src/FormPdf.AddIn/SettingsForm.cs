@@ -18,6 +18,7 @@ namespace FormPdf.AddIn
         private readonly CheckBox _inheritChecks = new CheckBox { Text = "チェック／選択状態を初期値にする", AutoSize = true };
         private readonly CheckBox _scaleFont = new CheckBox { Text = "フォントサイズを印刷倍率に合わせる", AutoSize = true };
         private readonly CheckBox _openAfter = new CheckBox { Text = "出力後に PDF を開く", AutoSize = true };
+        private readonly CheckBox _autoCalibrate = new CheckBox { Text = "自動位置合わせ（Excel で 2 回出力して実際の位置を測る）", AutoSize = true };
         private readonly CheckBox _calibration = new CheckBox { Text = "校正モード（フィールド位置に赤枠と名前を描く）", AutoSize = true };
         private readonly NumericUpDown _offsetX = Number(-200, 200, 1, 0.5m);
         private readonly NumericUpDown _offsetY = Number(-200, 200, 1, 0.5m);
@@ -70,6 +71,7 @@ namespace FormPdf.AddIn
             Row(table, "四角・丸の左端位置（pt）", _buttonInset);
 
             Section(table, "位置の補正（校正）");
+            Row(table, "", _autoCalibrate);
             Row(table, "", _calibration);
             Row(table, "X 補正（pt、右が＋）", _offsetX);
             Row(table, "Y 補正（pt、下が＋）", _offsetY);
@@ -145,6 +147,7 @@ namespace FormPdf.AddIn
             _inheritChecks.Checked = s.InheritCheckStates;
             _scaleFont.Checked = s.ScaleFontWithPage;
             _openAfter.Checked = s.OpenAfterExport;
+            _autoCalibrate.Checked = s.AutoCalibrate;
             _calibration.Checked = s.CalibrationMode;
             _offsetX.Value = Clamp(_offsetX, s.OffsetX);
             _offsetY.Value = Clamp(_offsetY, s.OffsetY);
@@ -169,6 +172,7 @@ namespace FormPdf.AddIn
             s.InheritCheckStates = _inheritChecks.Checked;
             s.ScaleFontWithPage = _scaleFont.Checked;
             s.OpenAfterExport = _openAfter.Checked;
+            s.AutoCalibrate = _autoCalibrate.Checked;
             s.CalibrationMode = _calibration.Checked;
             s.OffsetX = (double)_offsetX.Value;
             s.OffsetY = (double)_offsetY.Value;

@@ -97,6 +97,23 @@ namespace FormPdf.Core.Model
         public bool IsChecked { get; set; }
         /// <summary>正規化済みのリンクセル（例: "Sheet1!A1"）。無ければ null。</summary>
         public string LinkedCell { get; set; }
+
+        // 自動位置合わせ（Excel が出力した PDF 上で実測した位置）
+        /// <summary>実測した PDF ページ（0 始まり、PDF 全体での番号）。未測定なら null。</summary>
+        public int? MeasuredPageIndex { get; set; }
+        /// <summary>実測した位置（PDF 座標）。未測定なら null。</summary>
+        public PdfBox? MeasuredRect { get; set; }
+    }
+
+    /// <summary>PDF 上で塗りつぶされた領域（自動位置合わせ用のマーカー検出に使う）。</summary>
+    public struct FilledArea
+    {
+        public int PageIndex;
+        /// <summary>塗り色（0〜255）。</summary>
+        public double R;
+        public double G;
+        public double B;
+        public PdfBox Bounds;
     }
 
     public sealed class GroupBoxInfo

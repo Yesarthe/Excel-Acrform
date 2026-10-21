@@ -45,6 +45,11 @@ namespace FormPdf.Core.Infrastructure
         [DataMember(Order = 41)] public double OffsetX { get; set; }
         /// <summary>全体の Y 補正（pt、下が正）。</summary>
         [DataMember(Order = 42)] public double OffsetY { get; set; }
+        /// <summary>
+        /// 自動位置合わせ: 図形の位置に色付きの目印を置いて一度 PDF 出力し、実際の位置を測ってからフィールドを置く。
+        /// Excel での PDF 出力が 2 回になるが、改ページや縮小率の計算に頼らない。
+        /// </summary>
+        [DataMember(Order = 39)] public bool AutoCalibrate { get; set; } = true;
         /// <summary>倍率の補正（%）。例: 0.5 なら倍率を 1.005 倍にする。</summary>
         [DataMember(Order = 43)] public double ScaleCorrectionPercent { get; set; }
 
@@ -69,6 +74,7 @@ namespace FormPdf.Core.Infrastructure
             ScaleFontWithPage = d.ScaleFontWithPage;
             OpenAfterExport = d.OpenAfterExport;
             Scope = d.Scope;
+            AutoCalibrate = d.AutoCalibrate;
             CheckBoxSize = d.CheckBoxSize;
             OptionButtonSize = d.OptionButtonSize;
             ButtonLeftInset = d.ButtonLeftInset;

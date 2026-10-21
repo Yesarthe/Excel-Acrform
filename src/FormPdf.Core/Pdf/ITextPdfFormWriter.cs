@@ -14,6 +14,9 @@ using iText.Kernel.Font;
 using iText.Kernel.Geom;
 using iText.Kernel.Pdf;
 using iText.Kernel.Pdf.Canvas;
+using iText.Kernel.Pdf.Canvas.Parser;
+using iText.Kernel.Pdf.Canvas.Parser.Data;
+using iText.Kernel.Pdf.Canvas.Parser.Listener;
 using iText.Kernel.Pdf.Extgstate;
 using iText.Kernel.Pdf.Xobject;
 using iText.Layout.Properties;
@@ -46,6 +49,67 @@ namespace FormPdf.Core.Pdf
                 }
             }
             return list;
+        }
+
+        public IList<FilledArea> ReadFilledAreas(string pdfPath)
+        {
+            var result = new List<FilledArea>();
+            using (var pdf = new PdfDocument(new PdfReader(pdfPath)))
+            {
+                for (int i = 1; i <= pdf.GetNumberOfPages(); i++)
+                {
+                    var listener = new FillListener(i - 1, result);
+                    new PdfCanvasProcessor(listener).ProcessPageContent(pdf.GetPage(i));
+                }
+            }
+            return result;
+        }
+
+        /// <summary>塗りつぶしのパスを拾い、変換行列を適用した外接矩形と塗り色を記録する。</summary>
+        private sealed class FillListener : IEventListener
+        {
+            private readonly int _page;
+            private readonly List<FilledArea> _result;
+
+            public FillListener(int page, List<FilledArea> result)
+            {
+                _page = page;
+                _result = result;
+            }
+
+            public void EventOccurred(IEventData data, EventType type)
+            {
+                if (type != EventType.RENDER_PATH || !(data is PathRenderInfo info)) return;
+                if ((info.GetOperation() & PathRenderInfo.FILL) == 0) return;
+                var color = info.GetFillColor();
+                var v = color?.GetColorValue();
+                if (v == null || v.Length != 3) return;
+
+                var ctm = info.GetCtm();
+                double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+                foreach (var sub in info.GetPath().GetSubpaths())
+                    foreach (var seg in sub.GetSegments())
+                        foreach (var pt in seg.GetBasePoints())
+                        {
+                            double x = pt.GetX(), y = pt.GetY();
+                            double tx = ctm.Get(Matrix.I11) * x + ctm.Get(Matrix.I21) * y + ctm.Get(Matrix.I31);
+                            double ty = ctm.Get(Matrix.I12) * x + ctm.Get(Matrix.I22) * y + ctm.Get(Matrix.I32);
+                            minX = Math.Min(minX, tx); maxX = Math.Max(maxX, tx);
+                            minY = Math.Min(minY, ty); maxY = Math.Max(maxY, ty);
+                        }
+                if (minX > maxX) return;
+
+                _result.Add(new FilledArea
+                {
+                    PageIndex = _page,
+                    R = v[0] * 255.0,
+                    G = v[1] * 255.0,
+                    B = v[2] * 255.0,
+                    Bounds = new PdfBox(minX, minY, maxX - minX, maxY - minY),
+                });
+            }
+
+            public ICollection<EventType> GetSupportedEvents() => new[] { EventType.RENDER_PATH };
         }
 
         public int Write(string sourcePdf, string outputPdf, FormDocumentSpec spec, FormPdfSettings settings, WarningList warnings)
