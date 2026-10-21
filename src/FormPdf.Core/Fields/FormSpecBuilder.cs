@@ -33,6 +33,11 @@ namespace FormPdf.Core.Fields
             set => _drawingsByPage = value?.GroupBy(a => a.PageIndex).ToDictionary(g => g.Key, g => g.Select(a => a.Bounds).ToList());
         }
 
+        /// <summary>
+        /// true: PageDrawings はコントロール自身の描画だけ（DrawingDiff の結果）。検出の条件を広げる。
+        /// </summary>
+        public bool PageDrawingsAreIsolated { get; set; }
+
         /// <summary>チェックボックス・オプションボタンの数と、そのうち印字から位置を検出できた数（ログ用）。</summary>
         public int ButtonCount { get; private set; }
         public int DetectedButtonCount { get; private set; }
@@ -218,8 +223,8 @@ namespace FormPdf.Core.Fields
         }
 
         /// <summary>印字から検出できたボタンの、コントロールに対する四角・丸の位置（印刷倍率で割った値）。</summary>
-        private readonly Dictionary<TargetKind, List<(double dx, double dy, double size)>> _learned =
-            new Dictionary<TargetKind, List<(double, double, double)>>();
+        private readonly Dictionary<TargetKind, List<(int page, double dx, double dy, double size)>> _learned =
+            new Dictionary<TargetKind, List<(int, double, double, double)>>();
 
         /// <summary>検出できなかったボタン。Build の最後に、検出できたボタンの位置関係を当てはめる。</summary>
         private readonly List<(TargetKind kind, Placement m, string name, Action<PdfBox> set)> _undetected =
@@ -237,7 +242,7 @@ namespace FormPdf.Core.Fields
             if (_settings.DetectButtonFrames && _drawingsByPage != null && _drawingsByPage.TryGetValue(m.Page, out var drawings))
             {
                 double expected = (sizeSetting > 0 ? sizeSetting : 10) * s;
-                var found = ButtonFrameDetector.Find(drawings, m.Rect, expected);
+                var found = ButtonFrameDetector.Find(drawings, m.Rect, expected, PageDrawingsAreIsolated);
                 if (found.HasValue)
                 {
                     var f = found.Value;
@@ -245,8 +250,8 @@ namespace FormPdf.Core.Fields
                     ButtonLog.Add($"{name} p{m.Page + 1} 全体={m.Rect} → 検出={f}");
                     if (s > 0)
                     {
-                        if (!_learned.TryGetValue(kind, out var list)) _learned[kind] = list = new List<(double, double, double)>();
-                        list.Add(((f.X - m.Rect.X) / s,
+                        if (!_learned.TryGetValue(kind, out var list)) _learned[kind] = list = new List<(int, double, double, double)>();
+                        list.Add((m.Page, (f.X - m.Rect.X) / s,
                                   (f.Y + f.Height / 2 - (m.Rect.Y + m.Rect.Height / 2)) / s,
                                   Math.Max(f.Width, f.Height) / s));
                     }
@@ -265,15 +270,18 @@ namespace FormPdf.Core.Fields
         }
 
         /// <summary>
-        /// 検出できなかったボタンを、同じ種類（無ければもう一方の種類）の検出結果の中央値で置き直す。
-        /// Excel の四角・丸は大きさも左端からの位置もコントロールによらず一定なので、1 個でも検出できれば合わせられる。
+        /// 検出できなかったボタンを、検出できたボタンの位置関係の中央値で置き直す。
+        /// 優先順: 同じ種類・同じページ → 同じ種類 → もう一方の種類。
+        /// （Excel の四角・丸の大きさはシートの表示倍率で変わるため、同じページ＝同じシートのものを優先する）
         /// </summary>
         private void ApplyLearnedToUndetected()
         {
             foreach (var (kind, m, name, set) in _undetected)
             {
-                if (!_learned.TryGetValue(kind, out var list) || list.Count == 0)
-                    list = _learned.Values.FirstOrDefault(l => l.Count > 0);
+                _learned.TryGetValue(kind, out var sameKind);
+                var list = sameKind?.Where(t => t.page == m.Page).ToList();
+                if (list == null || list.Count == 0) list = sameKind;
+                if (list == null || list.Count == 0) list = _learned.Values.FirstOrDefault(l => l.Count > 0);
                 if (list == null)
                 {
                     ButtonLog.Add($"{name} p{m.Page + 1} 全体={m.Rect} → 既定（検出例なし）");

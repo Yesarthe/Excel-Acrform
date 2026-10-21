@@ -16,14 +16,24 @@ namespace FormPdf.Core.Layout
         /// <param name="drawings">そのページの描画（パス・画像）の外接矩形。</param>
         /// <param name="control">コントロール全体の位置（PDF 座標）。</param>
         /// <param name="expectedSize">四角・丸のおおよその大きさ（pt、印刷倍率適用後）。</param>
+        /// <param name="isolated">
+        /// true: drawings はコントロール自身の描画だけ（DrawingDiff で罫線等を除いたもの）。
+        /// 紛らわしい描画が無いので、探す範囲と大きさの条件を広げる
+        /// （Excel の四角は表示倍率や画面のスケールで大きさが変わり、コントロールの枠から少しはみ出すこともある）。
+        /// </param>
         /// <returns>見つかった四角・丸の外接矩形。見つからなければ null。</returns>
-        public static PdfBox? Find(IEnumerable<PdfBox> drawings, PdfBox control, double expectedSize)
+        public static PdfBox? Find(IEnumerable<PdfBox> drawings, PdfBox control, double expectedSize, bool isolated = false)
         {
             double minSize = Math.Max(2.5, expectedSize * 0.4);
-            double maxSize = Math.Max(Math.Min(control.Height + Tolerance, expectedSize * 2.5), minSize);
+            double maxSize = isolated
+                ? Math.Max(control.Height * 1.6, expectedSize * 2.5) + Tolerance
+                : Math.Max(Math.Min(control.Height + Tolerance, expectedSize * 2.5), minSize);
+            if (isolated) minSize = 2.5;
 
             // コントロールの中にある、正方形に近い小さな図形（キャプションの文字はパスではないので含まれない）
-            var inside = drawings.Where(b => Inside(b, control)).ToList();
+            var inside = isolated
+                ? drawings.Where(b => CenterInside(b, control, Tolerance + control.Height * 0.25)).ToList()
+                : drawings.Where(b => Inside(b, control)).ToList();
             var squares = inside
                 .Where(b => b.Width >= minSize && b.Height >= minSize && b.Width <= maxSize && b.Height <= maxSize)
                 .Where(b => b.Width / b.Height > 0.7 && b.Width / b.Height < 1.43)
@@ -66,6 +76,12 @@ namespace FormPdf.Core.Layout
             if (w < minSize || h < minSize || w > maxSize || h > maxSize) return null;
             if (w / h <= 0.7 || w / h >= 1.43) return null;
             return new PdfBox(x1, y1, w, h);
+        }
+
+        private static bool CenterInside(PdfBox b, PdfBox c, double margin)
+        {
+            double cx = b.X + b.Width / 2, cy = b.Y + b.Height / 2;
+            return cx >= c.X - margin && cx <= c.X + c.Width + margin && cy >= c.Y - margin && cy <= c.Y + c.Height + margin;
         }
 
         private static bool Inside(PdfBox b, PdfBox c) =>

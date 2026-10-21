@@ -86,6 +86,7 @@ namespace FormPdf.AddIn
             bool saved = wb.Saved;
             int fieldCount;
             string markerPdf = null;
+            bool markerHasNoControls = false;
             var markerShapes = new List<ShapeInfo>();
 
             try
@@ -136,7 +137,7 @@ namespace FormPdf.AddIn
                         markerPdf = tempPdf + ".markers.pdf";
                         try
                         {
-                            ExportMarkers(wb, jobs, settings.Scope, markerPdf, markerShapes, warnings);
+                            markerHasNoControls = ExportMarkers(wb, jobs, settings.Scope, markerPdf, markerShapes, warnings);
                         }
                         catch (Exception ex)
                         {
@@ -179,7 +180,20 @@ namespace FormPdf.AddIn
                     {
                         try
                         {
-                            builder.PageDrawings = _writer.ReadDrawnAreas(tempPdf);
+                            var drawn = _writer.ReadDrawnAreas(tempPdf);
+                            if (markerPdf != null && markerHasNoControls && _writer.ReadPageSizes(markerPdf).Count == pageSizes.Count)
+                            {
+                                // コントロールあり（本番）−コントロールなし（位置測定用）＝コントロール自身の描画
+                                var controlsOnly = DrawingDiff.Subtract(drawn, _writer.ReadDrawnAreas(markerPdf));
+                                builder.PageDrawings = controlsOnly;
+                                builder.PageDrawingsAreIsolated = true;
+                                Logger.Write($"ボタン位置の検出: 差分方式（描画 {drawn.Count} 個のうちコントロール由来 {controlsOnly.Count} 個）");
+                            }
+                            else
+                            {
+                                builder.PageDrawings = drawn;
+                                Logger.Write("ボタン位置の検出: 全描画から推定（差分が使えないため）");
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -230,14 +244,34 @@ namespace FormPdf.AddIn
 
         /// <summary>
         /// 自動位置合わせ: 各図形と同じ位置・大きさの四角を図形ごとに固有の色で置き、一度 PDF 出力する。
-        /// 四角は出力後に必ず削除する。markerShapes[i] がマーカー番号 i の図形。
+        /// このときチェックボックス・オプションボタンは非表示にしておき、本番の出力との差分で
+        /// それらが描いた四角・丸だけを取り出せるようにする（DrawingDiff）。
+        /// 四角の削除と表示状態の復元は必ず行う。markerShapes[i] がマーカー番号 i の図形。
         /// </summary>
-        private void ExportMarkers(XL.Workbook wb, List<SheetJob> jobs, ExportScope scope, string path,
+        /// <returns>チェックボックス・オプションボタンをすべて非表示にできたら true（差分が使える）。</returns>
+        private bool ExportMarkers(XL.Workbook wb, List<SheetJob> jobs, ExportScope scope, string path,
             List<ShapeInfo> markerShapes, WarningList warnings)
         {
             var markers = new List<XL.Shape>();
+            var hidden = new List<(XL.Shape shape, Office.MsoTriState visible)>();
+            bool allHidden = true;
             try
             {
+                foreach (var t in jobs.SelectMany(j => j.Targets).Where(t => t.Info.Kind != TargetKind.TextBox))
+                {
+                    try
+                    {
+                        var v = t.Com.Visible;
+                        t.Com.Visible = Office.MsoTriState.msoFalse;
+                        hidden.Add((t.Com, v));
+                    }
+                    catch (Exception ex)
+                    {
+                        allHidden = false;
+                        Logger.Write($"{t.Info.Name} を位置測定のために非表示にできませんでした: {ex.Message}");
+                    }
+                }
+
                 foreach (var job in jobs.Where(j => j.Worksheet != null && j.Targets.Count > 0))
                 {
                     XL.Shapes shapes = job.Worksheet.Shapes;
@@ -278,9 +312,22 @@ namespace FormPdf.AddIn
                 }
 
                 ExportWithExcel(wb, jobs, scope, path);
+                return allHidden;
             }
             finally
             {
+                for (int i = hidden.Count - 1; i >= 0; i--)
+                {
+                    try
+                    {
+                        hidden[i].shape.Visible = hidden[i].visible;
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Write("チェックボックス等の表示状態を戻せませんでした: " + ex.Message);
+                        warnings.Add("チェックボックス等の表示状態を元に戻せませんでした。確認してください。");
+                    }
+                }
                 foreach (var m in markers)
                 {
                     try
