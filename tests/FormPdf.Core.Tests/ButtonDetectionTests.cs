@@ -115,9 +115,10 @@ namespace FormPdf.Core.Tests
             var checks = spec.Fields.OfType<CheckBoxSpec>().ToDictionary(f => f.Name);
             Assert.Equal(102, checks["同意"].Rect.X, 2);
             Assert.Equal(503.5, checks["同意"].Rect.Y, 2);
-            // 印字が見つからないものは従来どおり左端・縦中央の 10pt
-            Assert.Equal(300, checks["印字なし"].Rect.X, 2);
+            // 印字が見つからないものは、検出できたチェックボックスと同じ位置関係（左から 2pt・10pt 角・縦中央）
+            Assert.Equal(302, checks["印字なし"].Rect.X, 2);
             Assert.Equal(303.5, checks["印字なし"].Rect.Y, 2);
+            Assert.Equal(10, checks["印字なし"].Rect.Width, 2);
 
             var radio = spec.Fields.OfType<RadioGroupSpec>().Single().Buttons.Single();
             Assert.Equal(104, radio.Rect.X, 1);
@@ -133,6 +134,56 @@ namespace FormPdf.Core.Tests
             };
             var specOff = off.Build(new[] { sheet }, pages);
             Assert.Equal(100, specOff.Fields.OfType<CheckBoxSpec>().Single(f => f.Name == "同意").Rect.X, 2);
+            Assert.Equal(300, specOff.Fields.OfType<CheckBoxSpec>().Single(f => f.Name == "印字なし").Rect.X, 2);
+        }
+
+        [Fact]
+        public void Undetected_UseMedianOfDetected_ScaledByPrintScale()
+        {
+            // 印刷倍率 0.5 のページ。検出できた 2 個は「左から 3pt・12pt 角・中心が 1pt 下」（倍率で割った値）
+            ShapeInfo Cb(string name, double x, double y)
+            {
+                var c = BuilderTests.Check(name, 0, 0);       // Bounds 80 x 17
+                c.MeasuredPageIndex = 0;
+                c.MeasuredRect = new PdfBox(x, y, 40, 8.5);   // 0.5 倍
+                return c;
+            }
+            var a = Cb("a", 100, 700);
+            var b = Cb("b", 100, 600);
+            var c3 = Cb("c", 300, 500);
+            var drawings = new List<FilledArea>();
+            foreach (var (x, y) in new[] { (100.0, 700.0), (100.0, 600.0) })
+            {
+                // 中心 = y + 4.25 − 0.5、大きさ 6、左から 1.5
+                double cy = y + 4.25 - 0.5;
+                drawings.Add(new FilledArea { PageIndex = 0, Bounds = new PdfBox(x + 1.5, cy - 3, 6, 6) });
+            }
+
+            var builder = new FormSpecBuilder(new FormPdfSettings(), new WarningList()) { PageDrawings = drawings };
+            var spec = builder.Build(new[] { BuilderTests.Sheet("S", a, b, c3) }, new[] { new PageSizeD(595, 842) });
+            var r = spec.Fields.OfType<CheckBoxSpec>().Single(f => f.Name == "c").Rect;
+            Assert.Equal(301.5, r.X, 6);
+            Assert.Equal(6, r.Width, 6);
+            Assert.Equal(500 + 4.25 - 0.5 - 3, r.Y, 6);
+            Assert.Equal(2, builder.DetectedButtonCount);
+        }
+
+        [Fact]
+        public void FindsSquare_DrawnAsSeparateEdges()
+        {
+            // 立体枠: 上・左（暗）と下・右（明）の 4 本の線
+            var drawings = new List<PdfBox>
+            {
+                new PdfBox(102, 513.5, 10, 0),
+                new PdfBox(102, 503.5, 0, 10),
+                new PdfBox(102, 503.5, 10, 0),
+                new PdfBox(112, 503.5, 0, 10),
+                new PdfBox(40, 508, 360, 0), // 罫線
+            };
+            var box = ButtonFrameDetector.Find(drawings, CheckControl, 10).Value;
+            Assert.Equal(102, box.X, 2);
+            Assert.Equal(503.5, box.Y, 2);
+            Assert.Equal(10, box.Width, 2);
         }
     }
 }
