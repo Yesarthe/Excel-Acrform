@@ -51,65 +51,95 @@ namespace FormPdf.Core.Pdf
             return list;
         }
 
-        public IList<FilledArea> ReadFilledAreas(string pdfPath)
+        public IList<FilledArea> ReadFilledAreas(string pdfPath) => ReadAreas(pdfPath, fillsOnly: true);
+
+        public IList<FilledArea> ReadDrawnAreas(string pdfPath) => ReadAreas(pdfPath, fillsOnly: false);
+
+        private static IList<FilledArea> ReadAreas(string pdfPath, bool fillsOnly)
         {
             var result = new List<FilledArea>();
             using (var pdf = new PdfDocument(new PdfReader(pdfPath)))
             {
                 for (int i = 1; i <= pdf.GetNumberOfPages(); i++)
                 {
-                    var listener = new FillListener(i - 1, result);
+                    var listener = new DrawingListener(i - 1, fillsOnly, result);
                     new PdfCanvasProcessor(listener).ProcessPageContent(pdf.GetPage(i));
                 }
             }
             return result;
         }
 
-        /// <summary>塗りつぶしのパスを拾い、変換行列を適用した外接矩形と塗り色を記録する。</summary>
-        private sealed class FillListener : IEventListener
+        /// <summary>
+        /// パス（と画像）を拾い、変換行列を適用した外接矩形を記録する。
+        /// fillsOnly のときは RGB で塗りつぶしたパスだけを、塗り色付きで記録する。
+        /// </summary>
+        private sealed class DrawingListener : IEventListener
         {
             private readonly int _page;
+            private readonly bool _fillsOnly;
             private readonly List<FilledArea> _result;
 
-            public FillListener(int page, List<FilledArea> result)
+            public DrawingListener(int page, bool fillsOnly, List<FilledArea> result)
             {
                 _page = page;
+                _fillsOnly = fillsOnly;
                 _result = result;
             }
 
             public void EventOccurred(IEventData data, EventType type)
             {
-                if (type != EventType.RENDER_PATH || !(data is PathRenderInfo info)) return;
-                if ((info.GetOperation() & PathRenderInfo.FILL) == 0) return;
-                var color = info.GetFillColor();
-                var v = color?.GetColorValue();
-                if (v == null || v.Length != 3) return;
+                if (type == EventType.RENDER_IMAGE && !_fillsOnly && data is ImageRenderInfo image)
+                {
+                    // 画像は単位正方形を CTM で写した範囲に描かれる
+                    var m = image.GetImageCtm();
+                    var box = Transform(m, new[] { (0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0) });
+                    if (box.HasValue) Add(box.Value, double.NaN, double.NaN, double.NaN);
+                    return;
+                }
 
-                var ctm = info.GetCtm();
-                double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+                if (type != EventType.RENDER_PATH || !(data is PathRenderInfo info)) return;
+                int op = info.GetOperation();
+                if (op == PathRenderInfo.NO_OP) return; // クリップのみ
+                bool fill = (op & PathRenderInfo.FILL) != 0;
+
+                double r = double.NaN, g = double.NaN, b = double.NaN;
+                if (_fillsOnly)
+                {
+                    if (!fill) return;
+                    var v = info.GetFillColor()?.GetColorValue();
+                    if (v == null || v.Length != 3) return;
+                    r = v[0] * 255.0;
+                    g = v[1] * 255.0;
+                    b = v[2] * 255.0;
+                }
+
+                var points = new List<(double, double)>();
                 foreach (var sub in info.GetPath().GetSubpaths())
                     foreach (var seg in sub.GetSegments())
                         foreach (var pt in seg.GetBasePoints())
-                        {
-                            double x = pt.GetX(), y = pt.GetY();
-                            double tx = ctm.Get(Matrix.I11) * x + ctm.Get(Matrix.I21) * y + ctm.Get(Matrix.I31);
-                            double ty = ctm.Get(Matrix.I12) * x + ctm.Get(Matrix.I22) * y + ctm.Get(Matrix.I32);
-                            minX = Math.Min(minX, tx); maxX = Math.Max(maxX, tx);
-                            minY = Math.Min(minY, ty); maxY = Math.Max(maxY, ty);
-                        }
-                if (minX > maxX) return;
-
-                _result.Add(new FilledArea
-                {
-                    PageIndex = _page,
-                    R = v[0] * 255.0,
-                    G = v[1] * 255.0,
-                    B = v[2] * 255.0,
-                    Bounds = new PdfBox(minX, minY, maxX - minX, maxY - minY),
-                });
+                            points.Add((pt.GetX(), pt.GetY()));
+                var bounds = Transform(info.GetCtm(), points);
+                if (bounds.HasValue) Add(bounds.Value, r, g, b);
             }
 
-            public ICollection<EventType> GetSupportedEvents() => new[] { EventType.RENDER_PATH };
+            private void Add(PdfBox bounds, double r, double g, double b) =>
+                _result.Add(new FilledArea { PageIndex = _page, R = r, G = g, B = b, Bounds = bounds });
+
+            private static PdfBox? Transform(Matrix ctm, IEnumerable<(double x, double y)> points)
+            {
+                double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+                foreach (var (x, y) in points)
+                {
+                    double tx = ctm.Get(Matrix.I11) * x + ctm.Get(Matrix.I21) * y + ctm.Get(Matrix.I31);
+                    double ty = ctm.Get(Matrix.I12) * x + ctm.Get(Matrix.I22) * y + ctm.Get(Matrix.I32);
+                    minX = Math.Min(minX, tx); maxX = Math.Max(maxX, tx);
+                    minY = Math.Min(minY, ty); maxY = Math.Max(maxY, ty);
+                }
+                if (minX > maxX) return null;
+                return new PdfBox(minX, minY, maxX - minX, maxY - minY);
+            }
+
+            public ICollection<EventType> GetSupportedEvents() => new[] { EventType.RENDER_PATH, EventType.RENDER_IMAGE };
         }
 
         public int Write(string sourcePdf, string outputPdf, FormDocumentSpec spec, FormPdfSettings settings, WarningList warnings)

@@ -16,11 +16,28 @@ namespace FormPdf.Core.Fields
         private readonly FormPdfSettings _settings;
         private readonly WarningList _warnings;
 
+        private Dictionary<int, List<PdfBox>> _drawingsByPage;
+
         public FormSpecBuilder(FormPdfSettings settings, WarningList warnings)
         {
             _settings = settings;
             _warnings = warnings;
         }
+
+        /// <summary>
+        /// 出力 PDF の描画（IPdfFormWriter.ReadDrawnAreas の結果）。
+        /// 設定されていれば、チェックボックスの四角・オプションボタンの丸を印字から探して重ねる。
+        /// </summary>
+        public IList<FilledArea> PageDrawings
+        {
+            set => _drawingsByPage = value?.GroupBy(a => a.PageIndex).ToDictionary(g => g.Key, g => g.Select(a => a.Bounds).ToList());
+        }
+
+        /// <summary>チェックボックス・オプションボタンの数と、そのうち印字から位置を検出できた数（ログ用）。</summary>
+        public int ButtonCount { get; private set; }
+        public int DetectedButtonCount { get; private set; }
+        /// <summary>ボタンごとの配置の記録（ページ、コントロール全体、ウィジェット、検出の有無）。ログ用。</summary>
+        public List<string> ButtonLog { get; } = new List<string>();
 
         /// <param name="sheets">PDF に出力された順のシート。</param>
         /// <param name="pageSizes">出力 PDF の全ページのサイズ。</param>
@@ -198,16 +215,34 @@ namespace FormPdf.Core.Fields
             };
         }
 
-        /// <summary>図形の左端から、ボタン部分（四角・丸）の正方形を切り出す。</summary>
+        /// <summary>
+        /// ボタン部分（四角・丸）の位置。Excel の印字から見つかればそれに合わせ、
+        /// 見つからなければ図形の左端・縦中央から正方形を切り出す。
+        /// </summary>
         private PdfBox ButtonRect(Placement m, double sizeSetting)
         {
             double s = m.Scale;
+            ButtonCount++;
+            if (_settings.DetectButtonFrames && _drawingsByPage != null && _drawingsByPage.TryGetValue(m.Page, out var drawings))
+            {
+                double expected = (sizeSetting > 0 ? sizeSetting : 10) * s;
+                var found = ButtonFrameDetector.Find(drawings, m.Rect, expected);
+                if (found.HasValue)
+                {
+                    DetectedButtonCount++;
+                    ButtonLog.Add($"p{m.Page + 1} 全体={m.Rect} → 検出={found.Value}");
+                    return found.Value;
+                }
+            }
+
             double full = m.Rect.Height;
             double size = sizeSetting > 0 ? Math.Min(sizeSetting * s, full) : full;
             size = Math.Min(size, m.Rect.Width);
             double x = m.Rect.X + _settings.ButtonLeftInset * s;
             double y = m.Rect.Y + (full - size) / 2;
-            return new PdfBox(x, y, size, size);
+            var box = new PdfBox(x, y, size, size);
+            ButtonLog.Add($"p{m.Page + 1} 全体={m.Rect} → 既定={box}");
+            return box;
         }
 
         /// <summary>図形 1 個の配置先（PDF 全体でのページ番号、PDF 座標、印刷倍率）。</summary>

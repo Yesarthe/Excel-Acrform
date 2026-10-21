@@ -159,6 +159,7 @@ namespace FormPdf.Core.Tests
             Assert.True(partial.InheritTextValues);
             Assert.Equal("#FF0000", partial.CheckColor);
             Assert.True(partial.AutoCalibrate); // 既存の settings.json でも自動位置合わせは ON
+            Assert.True(partial.DetectButtonFrames);
         }
     }
 }

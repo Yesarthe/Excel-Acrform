@@ -19,6 +19,12 @@ namespace FormPdf.Core.Pdf
         IList<FilledArea> ReadFilledAreas(string pdfPath);
 
         /// <summary>
+        /// PDF 内のすべての描画（塗り・線のパスと画像）の外接矩形を列挙する。
+        /// チェックボックスの四角・オプションボタンの丸の位置検出に使う。色は使わない。
+        /// </summary>
+        IList<FilledArea> ReadDrawnAreas(string pdfPath);
+
+        /// <summary>
         /// sourcePdf（Excel が出力した PDF）に AcroForm フィールドを追加して outputPdf に書き出す。
         /// 致命的でない問題は warnings に追加し、処理を続ける。
         /// </summary>
